@@ -8,7 +8,7 @@ def is_apple_silicon():
     if platform.processor() == 'arm':
         return True
     else:
-        return False
+        return True
 
 
 def get_clean_env():
