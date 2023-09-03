@@ -108,7 +108,7 @@ private final class ContextControllerWithTransitionContentSourceImpl: ContextCon
             return
         }
         
-        guard let itemAvatarSnapshotView = itemNode.avatarContainerNode.view.snapshotView(afterScreenUpdates: false), let itemBackgroundSnapshotView = itemNode.backgroundNode.layer.snapshotContentTreeAsView() else {
+        guard let itemAvatarSnapshotView = itemNode.avatarContainerNode.view.snapshotView(afterScreenUpdates: true), let itemBackgroundSnapshotView = itemNode.backgroundNode.layer.snapshotContentTreeAsView() else {
             return
         }
         
