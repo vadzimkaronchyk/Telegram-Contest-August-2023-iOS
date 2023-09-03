@@ -149,7 +149,7 @@ public final class ChatListNavigationBar: Component {
     }()
 
     public final class View: UIView {
-        private let backgroundView: BlurredBackgroundView
+        public let backgroundView: BlurredBackgroundView
         private let separatorLayer: SimpleLayer
         
         public let headerContent = ComponentView<Empty>()
@@ -165,6 +165,7 @@ public final class ChatListNavigationBar: Component {
         private var currentLayout: CurrentLayout?
         private var rawScrollOffset: CGFloat?
         private var currentAllowAvatarsExpansion: Bool = false
+        private var currentAllowExtraSpacingExpansion: Bool = false
         public private(set) var clippedScrollOffset: CGFloat?
         
         public var deferScrollApplication: Bool = false
@@ -215,16 +216,17 @@ public final class ChatListNavigationBar: Component {
         
         public func applyCurrentScroll(transition: Transition) {
             if let rawScrollOffset = self.rawScrollOffset, self.hasDeferredScrollOffset {
-                self.applyScroll(offset: rawScrollOffset, allowAvatarsExpansion: self.currentAllowAvatarsExpansion, transition: transition)
+                self.applyScroll(offset: rawScrollOffset, allowAvatarsExpansion: self.currentAllowAvatarsExpansion, allowExtraSpacingExpansion: self.currentAllowExtraSpacingExpansion, transition: transition)
             }
         }
         
-        public func applyScroll(offset: CGFloat, allowAvatarsExpansion: Bool, forceUpdate: Bool = false, transition: Transition) {
+        public func applyScroll(offset: CGFloat, allowAvatarsExpansion: Bool, allowExtraSpacingExpansion: Bool, forceUpdate: Bool = false, transition: Transition) {
             let transition = transition
             
             self.rawScrollOffset = offset
             let allowAvatarsExpansionUpdated = self.currentAllowAvatarsExpansion != allowAvatarsExpansion
             self.currentAllowAvatarsExpansion = allowAvatarsExpansion
+            self.currentAllowExtraSpacingExpansion = allowExtraSpacingExpansion
             
             if self.deferScrollApplication && !forceUpdate {
                 self.hasDeferredScrollOffset = true
@@ -242,9 +244,31 @@ public final class ChatListNavigationBar: Component {
             
             let searchOffsetDistance: CGFloat = ChatListNavigationBar.searchScrollHeight
             
-            let minContentOffset: CGFloat = ChatListNavigationBar.searchScrollHeight
+            let hasStories: Bool = {
+                guard let storySubscriptions = component.storySubscriptions else {
+                    return false
+                }
+                if !storySubscriptions.items.isEmpty {
+                    return true
+                }
+                if let accountItem = storySubscriptions.accountItem {
+                    return accountItem.storyCount > 0
+                }
+                return false
+            }()
             
-            let clippedScrollOffset = min(minContentOffset, offset)
+            let minContentOffset: CGFloat = ChatListNavigationBar.searchScrollHeight
+            let maxContentOffset: CGFloat = {
+                if allowExtraSpacingExpansion {
+                    return offset
+                }
+                if hasStories {
+                    return -ChatListNavigationBar.storiesScrollHeight
+                }
+                return 0.0
+            }()
+            let clippedScrollOffset = min(minContentOffset, max(maxContentOffset, offset))
+            
             if self.clippedScrollOffset == clippedScrollOffset && !self.hasDeferredScrollOffset && !forceUpdate && !allowAvatarsExpansionUpdated {
                 return
             }
@@ -321,10 +345,10 @@ public final class ChatListNavigationBar: Component {
             let storiesOffsetFraction: CGFloat
             let storiesUnlocked: Bool
             if allowAvatarsExpansion {
-                storiesOffsetFraction = max(0.0, min(4.0, -offset / ChatListNavigationBar.storiesScrollHeight))
-                if offset <= -65.0 {
+                storiesOffsetFraction = max(0.0, min(4.0, -clippedScrollOffset / ChatListNavigationBar.storiesScrollHeight))
+                if clippedScrollOffset <= -65.0 {
                     storiesUnlocked = true
-                } else if offset >= -61.0 {
+                } else if clippedScrollOffset >= -61.0 {
                     storiesUnlocked = false
                 } else {
                     storiesUnlocked = self.storiesUnlocked
@@ -334,7 +358,7 @@ public final class ChatListNavigationBar: Component {
                 storiesUnlocked = false
             }
             
-            if allowAvatarsExpansion, transition.animation.isImmediate, let storySubscriptions = component.storySubscriptions, !storySubscriptions.items.isEmpty {
+            if allowAvatarsExpansion, transition.animation.isImmediate, hasStories {
                 if self.storiesUnlocked != storiesUnlocked {
                     if storiesUnlocked {
                         HapticFeedback().tap()
@@ -358,6 +382,7 @@ public final class ChatListNavigationBar: Component {
                 storiesIncludeHidden: component.storiesIncludeHidden,
                 storiesFraction: storiesOffsetFraction,
                 storiesUnlocked: storiesUnlocked,
+                storiesExpandable: allowExtraSpacingExpansion,
                 uploadProgress: component.uploadProgress,
                 context: component.context,
                 theme: component.theme,
@@ -545,6 +570,7 @@ public final class ChatListNavigationBar: Component {
                         storiesIncludeHidden: headerComponent.storiesIncludeHidden,
                         storiesFraction: headerComponent.storiesFraction,
                         storiesUnlocked: headerComponent.storiesUnlocked,
+                        storiesExpandable: headerComponent.storiesExpandable,
                         uploadProgress: storyUploadProgress,
                         context: headerComponent.context,
                         theme: headerComponent.theme,
@@ -616,7 +642,7 @@ public final class ChatListNavigationBar: Component {
             
             if uploadProgressUpdated || storySubscriptionsUpdated {
                 if let rawScrollOffset = self.rawScrollOffset {
-                    self.applyScroll(offset: rawScrollOffset, allowAvatarsExpansion: self.currentAllowAvatarsExpansion, forceUpdate: true, transition: transition)
+                    self.applyScroll(offset: rawScrollOffset, allowAvatarsExpansion: self.currentAllowAvatarsExpansion, allowExtraSpacingExpansion: self.currentAllowExtraSpacingExpansion, forceUpdate: true, transition: transition)
                 }
             }
             

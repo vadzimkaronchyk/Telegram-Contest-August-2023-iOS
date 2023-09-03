@@ -150,4 +150,5 @@ public enum ContextContentNode {
     case reference(view: UIView)
     case extracted(node: ContextExtractedContentContainingNode, keepInPlace: Bool)
     case controller(ContextControllerContentNode)
+    case controllerWithTransition(ContextControllerContentNode)
 }

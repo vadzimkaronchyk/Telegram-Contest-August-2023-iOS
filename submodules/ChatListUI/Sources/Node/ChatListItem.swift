@@ -26,6 +26,7 @@ import TextNodeWithEntities
 import ComponentFlow
 import EmojiStatusComponent
 import AvatarVideoNode
+import UIKit
 
 public enum ChatListItemContent {
     public struct ThreadInfo: Equatable {
@@ -193,7 +194,7 @@ public class ChatListItem: ListViewItem, ChatListSearchItemNeighbour {
     public let selectable: Bool = true
     
     public var approximateHeight: CGFloat {
-        return self.hiddenOffset ? 0.0 : 44.0
+        return hiddenOffset ? 0.0 : 44.0
     }
     
     let header: ListViewItemHeader?
@@ -541,6 +542,7 @@ private final class ChatListItemAccessibilityCustomAction: UIAccessibilityCustom
 }
 
 private let separatorHeight = 1.0 / UIScreen.main.scale
+private let shadowHeight = 8.0
 
 private final class CachedChatListSearchResult {
     let text: String
@@ -929,7 +931,7 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
     
     var item: ChatListItem?
     
-    private let backgroundNode: ASDisplayNode
+    let backgroundNode: ASDisplayNode
     private let highlightedBackgroundNode: ASDisplayNode
     
     let contextContainer: ContextControllerSourceNode
@@ -970,6 +972,9 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
     var credibilityIconView: ComponentHostView<Empty>?
     var credibilityIconComponent: EmojiStatusComponent?
     let mutedIconNode: ASImageNode
+    
+    private var topShadowLayer: CAGradientLayer?
+    private var bottomShadowLayer: CAGradientLayer?
     
     private var hierarchyTrackingLayer: HierarchyTrackingLayer?
     private var cachedDataDisposable = MetaDisposable()
@@ -1297,6 +1302,49 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
             return true
         }
         
+        var startAnimation = false
+        self.contextContainer.customActivationProgress = { [weak self] progress, update in
+            guard let strongSelf = self else {
+                return
+            }
+            
+            let itemLayer = strongSelf.layer
+            let targetContentRect = CGRect(origin: CGPoint(), size: itemLayer.bounds.size)
+            
+            let scaleSide = targetContentRect.width
+            let maxScale: CGFloat = min(1.3, (scaleSide + 15.0) / scaleSide)
+            let currentScale = 1.0 * (1.0 - progress) + maxScale * progress
+            
+            let originalCenterOffsetX: CGFloat = itemLayer.bounds.width / 2.0 - targetContentRect.midX
+            let scaledCenterOffsetX: CGFloat = originalCenterOffsetX * currentScale
+            
+            let originalCenterOffsetY: CGFloat = targetContentRect.height / 2.0 - targetContentRect.midY
+            let scaledCenterOffsetY: CGFloat = originalCenterOffsetY * currentScale
+            
+            let scaleMidX: CGFloat = scaledCenterOffsetX - originalCenterOffsetX
+            let scaleMidY: CGFloat = scaledCenterOffsetY - originalCenterOffsetY
+            
+            let sublayerTransform = CATransform3DTranslate(CATransform3DScale(CATransform3DIdentity, currentScale, currentScale, 1.0), scaleMidX, scaleMidY, 0.0)
+            let previousTransform = itemLayer.sublayerTransform
+            itemLayer.sublayerTransform = sublayerTransform
+            
+            print("zxc - \(progress), \(update)")
+            switch update {
+            case .begin:
+                startAnimation = true
+            case .ended:
+                startAnimation = false
+                strongSelf.hideContextLayers()
+                
+                itemLayer.animate(from: NSValue(caTransform3D: previousTransform), to: NSValue(caTransform3D: sublayerTransform), keyPath: "sublayerTransform", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 0.2)
+            case .update:
+                if startAnimation {
+                    startAnimation = false
+                    strongSelf.showContextLayers(targetContentRect: targetContentRect)
+                }
+            }
+        }
+        
         self.contextContainer.activated = { [weak self] gesture, location in
             guard let strongSelf = self, let item = strongSelf.item else {
                 return
@@ -1317,6 +1365,68 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
             let avatarTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(self.avatarStoryTapGesture(_:)))
             self.avatarTapRecognizer = avatarTapRecognizer
             self.avatarNode.view.addGestureRecognizer(avatarTapRecognizer)
+        }
+    }
+    
+    private func showContextLayers(targetContentRect: CGRect) {
+        let topShadowLayer: CAGradientLayer
+        if let layer = self.topShadowLayer {
+            topShadowLayer = layer
+        } else {
+            let layer = CAGradientLayer()
+            layer.colors = [
+                UIColor(white: 1.0, alpha: 0.0).cgColor,
+                UIColor(white: 0.0, alpha: 0.15).cgColor
+            ]
+            topShadowLayer = layer
+            self.topShadowLayer = layer
+            self.layer.addSublayer(layer)
+        }
+        topShadowLayer.frame = CGRect(x: 0.0, y: -shadowHeight, width: targetContentRect.width, height: shadowHeight)
+        
+        let bottomShadowLayer: CAGradientLayer
+        if let layer = self.bottomShadowLayer {
+            bottomShadowLayer = layer
+        } else {
+            let layer = CAGradientLayer()
+            layer.colors = [
+                UIColor(white: 0.0, alpha: 0.15).cgColor,
+                UIColor(white: 1.0, alpha: 0.0).cgColor
+            ]
+            bottomShadowLayer = layer
+            self.bottomShadowLayer = layer
+            self.layer.addSublayer(layer)
+        }
+        bottomShadowLayer.frame = CGRect(x: 0.0, y: targetContentRect.height, width: targetContentRect.width, height: shadowHeight)
+        
+        self.separatorNode.alpha = 0.0
+        self.separatorNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2)
+        
+        topShadowLayer.opacity = 1.0
+        topShadowLayer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+        
+        bottomShadowLayer.opacity = 1.0
+        bottomShadowLayer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+    }
+    
+    private func hideContextLayers() {
+        self.separatorNode.alpha = 1.0
+        self.separatorNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+        
+        if let topShadowLayer = self.topShadowLayer {
+            topShadowLayer.opacity = 0.0
+            topShadowLayer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, completion: { [weak self] _ in
+                self?.topShadowLayer?.removeFromSuperlayer()
+                self?.topShadowLayer = nil
+            })
+        }
+        
+        if let bottomShadowLayer = self.bottomShadowLayer {
+            bottomShadowLayer.opacity = 0.0
+            bottomShadowLayer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, completion: { [weak self] _ in
+                self?.bottomShadowLayer?.removeFromSuperlayer()
+                self?.bottomShadowLayer = nil
+            })
         }
     }
     

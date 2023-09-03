@@ -20,6 +20,8 @@ import Postbox
 import ChatFolderLinkPreviewScreen
 import StoryContainerScreen
 import ChatListHeaderComponent
+import ComponentFlow
+import LottieAnimationComponent
 
 public enum ChatListNodeMode {
     case chatList(appendContacts: Bool)
@@ -1189,6 +1191,7 @@ public final class ChatListNode: ListView {
     public var contentOffsetChanged: ((ListViewVisibleContentOffset) -> Void)?
     public var contentScrollingEnded: ((ListView) -> Bool)?
     public var didBeginInteractiveDragging: ((ListView) -> Void)?
+    public var didEndInteractiveDragging: ((ListView) -> Void)?
     
     public var isEmptyUpdated: ((ChatListNodeEmptyState, Bool, ContainedViewLayoutTransition) -> Void)?
     private var currentIsEmptyState: ChatListNodeEmptyState?
@@ -1232,6 +1235,35 @@ public final class ChatListNode: ListView {
     }
     
     public var startedScrollingAtUpperBound: Bool = false
+    
+    public enum ArchiveSwipingState: Equatable {
+        case unavailable
+        case waitingForSwipe
+        case swiping
+        case startArchivingOnNextUpdate
+        case archiving(inset: CGFloat)
+        
+        var archiving: Bool {
+            switch self {
+            case .startArchivingOnNextUpdate, .archiving:
+                return true
+            default:
+                return false
+            }
+        }
+        
+        var additionalTopInset: CGFloat {
+            switch self {
+            case let .archiving(inset):
+                return inset
+            default:
+                return 0.0
+            }
+        }
+    }
+    
+    private var overscrollArchiveView: ComponentHostView<Empty>?
+    private(set) var archiveSwipingState: ArchiveSwipingState = .unavailable
     
     private let autoSetReady: Bool
     
@@ -1516,6 +1548,7 @@ public final class ChatListNode: ListView {
             guard let strongSelf = self else {
                 return
             }
+            strongSelf.clearHighlightAnimated(true)
             if let activateChatPreview = strongSelf.activateChatPreview {
                 activateChatPreview(item, threadId, node, gesture, location)
             } else {
@@ -2289,7 +2322,6 @@ public final class ChatListNode: ListView {
                     }
                 }
                 var doesIncludeRemovingPeerId = false
-                var doesIncludeArchive = false
                 var doesIncludeHiddenByDefaultArchive = false
                 var doesIncludeNotice = false
                 
@@ -2318,7 +2350,6 @@ public final class ChatListNode: ListView {
                             }
                         }
                     } else if case let .GroupReferenceEntry(groupReferenceEntry) = entry {
-                        doesIncludeArchive = true
                         doesIncludeHiddenByDefaultArchive = groupReferenceEntry.hiddenByDefault
                     } else if case .Notice = entry {
                         doesIncludeNotice = true
@@ -2334,9 +2365,6 @@ public final class ChatListNode: ListView {
                     disableAnimations = false
                 }
                 if doesIncludeRemovingPeerId != didIncludeRemovingPeerId {
-                    disableAnimations = false
-                }
-                if hideArchivedFolderByDefault && previousState.hiddenItemShouldBeTemporaryRevealed != state.hiddenItemShouldBeTemporaryRevealed && doesIncludeArchive {
                     disableAnimations = false
                 }
                 if didIncludeHiddenByDefaultArchive != doesIncludeHiddenByDefaultArchive {
@@ -2407,6 +2435,7 @@ public final class ChatListNode: ListView {
                 
                 var refreshStoryPeerIds: [PeerId] = []
                 var isHiddenItemVisible = false
+                var isSwipingArchiveVisible = false
                 if let range = range.visibleRange {
                     let entryCount = chatListView.filteredEntries.count
                     for i in max(0, range.firstIndex - 1) ..< range.lastIndex {
@@ -2428,7 +2457,7 @@ public final class ChatListNode: ListView {
                             
                                 break
                             case .GroupReferenceEntry:
-                                isHiddenItemVisible = true
+                                isSwipingArchiveVisible = true
                             default:
                                 break
                         }
@@ -2439,6 +2468,12 @@ public final class ChatListNode: ListView {
                         var state = state
                         state.hiddenItemShouldBeTemporaryRevealed = false
                         return state
+                    }
+                }
+                if !isSwipingArchiveVisible, !strongSelf.archiveSwipingState.archiving {
+                    if let overscrollArchiveView = strongSelf.overscrollArchiveView {
+                        strongSelf.overscrollArchiveView = nil
+                        overscrollArchiveView.removeFromSuperview()
                     }
                 }
                 if !refreshStoryPeerIds.isEmpty {
@@ -2805,6 +2840,29 @@ public final class ChatListNode: ListView {
             strongSelf.didBeginInteractiveDragging?(strongSelf)
         }
         
+        self.endedInteractiveDragging = { [weak self] _ in
+            guard let strongSelf = self else {
+                return
+            }
+            
+            defer {
+                strongSelf.didEndInteractiveDragging?(strongSelf)
+            }
+            
+            guard strongSelf.archiveSwipingState == .swiping else {
+                return
+            }
+            
+            guard let overscrollArchiveView = strongSelf.overscrollArchiveView, let overscrollArchiveComponentView = overscrollArchiveView.componentView as? ChatListOverscrollArchiveComponent.View else {
+                return
+            }
+            
+            if overscrollArchiveComponentView.state == .releaseToArchive {
+                strongSelf.revealScrollHiddenItem()
+                strongSelf.toggleArchivedFolderHiddenByDefault?()
+            }
+        }
+        
         self.didEndScrolling = { [weak self] _ in
             guard let strongSelf = self else {
                 return
@@ -2841,24 +2899,69 @@ public final class ChatListNode: ListView {
             guard let strongSelf = self else {
                 return
             }
+            print("zxc - \(strongSelf.archiveSwipingState)")
             if !strongSelf.dequeuedInitialTransitionOnLayout {
                 return
             }
             let atTop: Bool
             var revealHiddenItems: Bool = false
+            let offsetValue: CGFloat
             switch offset {
                 case .none, .unknown:
                     atTop = false
+                    offsetValue = 0.0
                 case let .known(value):
-                atTop = value <= -strongSelf.tempTopInset
+                    atTop = value <= -strongSelf.tempTopInset
                     if strongSelf.startedScrollingAtUpperBound && startedScrollingWithCanExpandHiddenItems && strongSelf.isTracking {
                         revealHiddenItems = value <= -strongSelf.tempTopInset - 60.0
                     }
+                    offsetValue = value + strongSelf.tempTopInset
             }
             strongSelf.scrolledAtTopValue = atTop
             strongSelf.contentOffsetChanged?(offset)
             if revealHiddenItems && !strongSelf.currentState.hiddenItemShouldBeTemporaryRevealed {
                 //strongSelf.revealScrollHiddenItem()
+            }
+            if strongSelf.archiveSwipingState == .unavailable || (strongSelf.archiveSwipingState == .swiping && offsetValue > 0.0) {
+                if let overscrollArchiveView = strongSelf.overscrollArchiveView {
+                   strongSelf.overscrollArchiveView = nil
+                   overscrollArchiveView.removeFromSuperview()
+               }
+            } else if let itemNode = strongSelf.firstChatListItemNode() {
+                let overscrollArchiveView: ComponentHostView<Empty>
+                if let current = strongSelf.overscrollArchiveView {
+                    overscrollArchiveView = current
+                } else {
+                    overscrollArchiveView = ComponentHostView<Empty>()
+                    strongSelf.overscrollArchiveView = overscrollArchiveView
+                    strongSelf.view.addSubview(overscrollArchiveView)
+                }
+                
+                let topInset = strongSelf.insets.top + strongSelf.tempTopInset
+                let overscrollArchiveViewSize = CGSize(
+                    width: strongSelf.bounds.width,
+                    height: abs(offsetValue + strongSelf.archiveSwipingState.additionalTopInset)
+                )
+                overscrollArchiveView.frame = CGRect(
+                    origin: CGPoint(x: 0.0, y: topInset),
+                    size: overscrollArchiveViewSize
+                )
+                let _ = overscrollArchiveView.update(
+                    transition: .immediate,
+                    component: AnyComponent(ChatListOverscrollArchiveComponent(
+                        avatarFrame: itemNode.avatarContainerNode.frame,
+                        offset: offsetValue
+                    )),
+                    environment: {},
+                    containerSize: overscrollArchiveViewSize
+                )
+                if let view = overscrollArchiveView.componentView as? ChatListOverscrollArchiveComponent.View, !strongSelf.archiveSwipingState.archiving {
+                    if offsetValue < -76.0 {
+                        view.playSwipeAnimation()
+                    } else {
+                        view.playReleaseAnimation()
+                    }
+                }
             }
         }
         
@@ -2890,6 +2993,16 @@ public final class ChatListNode: ListView {
         }
     }
     
+    func firstChatListItemNode() -> ChatListItemNode? {
+        var node: ChatListItemNode?
+        forEachItemNode { n in
+            if let chatListItemNode = n as? ChatListItemNode {
+                node = chatListItemNode
+            }
+        }
+        return node
+    }
+    
     func hasItemsToBeRevealed() -> Bool {
         if self.currentState.hiddenItemShouldBeTemporaryRevealed {
             return false
@@ -2913,6 +3026,11 @@ public final class ChatListNode: ListView {
         return isHiddenItemVisible
     }
     
+    func beginHiddenItemsSwiping() {
+        guard !self.archiveSwipingState.archiving else { return }
+        self.archiveSwipingState = .swiping
+    }
+    
     func revealScrollHiddenItem() {
         var isHiddenItemVisible = false
         self.forEachItemNode({ itemNode in
@@ -2929,11 +3047,12 @@ public final class ChatListNode: ListView {
                 }
             }
         })
-        if isHiddenItemVisible && !self.currentState.hiddenItemShouldBeTemporaryRevealed {
+        if isHiddenItemVisible && !self.currentState.hiddenItemShouldBeTemporaryRevealed, !self.archiveSwipingState.archiving {
             if self.hapticFeedback == nil {
                 self.hapticFeedback = HapticFeedback()
             }
             self.hapticFeedback?.impact(.medium)
+            self.archiveSwipingState = .startArchivingOnNextUpdate
             self.updateState { state in
                 var state = state
                 state.hiddenItemShouldBeTemporaryRevealed = true
@@ -3041,6 +3160,20 @@ public final class ChatListNode: ListView {
             let completion: (ListViewDisplayedItemRange) -> Void = { [weak self] visibleRange in
                 if let strongSelf = self {
                     strongSelf.chatListView = transition.chatListView
+                    
+                    if strongSelf.archiveSwipingState == .startArchivingOnNextUpdate {
+                        if let view = strongSelf.overscrollArchiveView?.componentView as? ChatListOverscrollArchiveComponent.View, let node = strongSelf.firstChatListItemNode() {
+                            strongSelf.archiveSwipingState = .archiving(inset: -node.frame.height)
+                            strongSelf.scroller.contentOffset = strongSelf.scroller.contentOffset.offsetBy(dx: 0, dy: node.frame.height)
+                            view.playArchiveAnimation(basedOn: node, completion: { [weak strongSelf] in
+                                strongSelf?.archiveSwipingState = .unavailable
+                                strongSelf?.overscrollArchiveView?.removeFromSuperview()
+                                strongSelf?.overscrollArchiveView = nil
+                            })
+                        } else {
+                            strongSelf.archiveSwipingState = .waitingForSwipe
+                        }
+                    }
                     
                     if strongSelf.fillPreloadItems {
                         let filteredEntries = transition.chatListView.filteredEntries
@@ -3952,4 +4085,454 @@ public class ChatHistoryListSelectionRecognizer: UIPanGestureRecognizer {
 
 func hideChatListContacts(context: AccountContext) {
     let _ = ApplicationSpecificNotice.setDisplayChatListContacts(accountManager: context.sharedContext.accountManager).start()
+}
+
+private final class ChatListOverscrollArchiveComponent: Component {
+    
+    let avatarFrame: CGRect
+    let offset: CGFloat
+    var isSwiped: Bool = false
+    
+    init(avatarFrame: CGRect, offset: CGFloat) {
+        self.avatarFrame = avatarFrame
+        self.offset = offset
+    }
+    
+    static func ==(lhs: ChatListOverscrollArchiveComponent, rhs: ChatListOverscrollArchiveComponent) -> Bool {
+        if lhs.avatarFrame != rhs.avatarFrame {
+            return false
+        }
+        if lhs.offset != rhs.offset {
+            return false
+        }
+        if lhs.isSwiped != rhs.isSwiped {
+            return false
+        }
+        return true
+    }
+    
+    final class View: UIView {
+        
+        private let capsuleView = UIView()
+        private let arrowImageView = UIImageView()
+        private let arrowCircleView = UIView()
+        private let swipeForArchiveLabel = UILabel()
+        private let releaseToArchiveLabel = UILabel()
+        private let swipeForArchiveLayer = CAGradientLayer()
+        private let releaseToArchiveLayer = CAGradientLayer()
+        private let releaseToArchiveMaskLayer = CAShapeLayer()
+        private let containerView = UIView()
+        private let animationView = ComponentHostView<Empty>()
+        
+        enum State {
+            case swipeForArchive
+            case releaseToArchive
+            case releasedToArchive
+        }
+        
+        private(set) var state: State = .swipeForArchive
+        
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            
+            self.capsuleView.backgroundColor = UIColor(white: 1.0, alpha: 0.2)
+            
+            self.arrowImageView.image = UIImage(bundleImageName: "Chat List/DownArrow")
+            self.arrowImageView.contentMode = .scaleAspectFill
+            self.arrowImageView.tintColor = UIColor(red: 163.0/255.0, green: 168.0/255.0, blue: 176.0/255.0, alpha: 1.0)
+            
+            self.arrowCircleView.backgroundColor = .white
+            
+            self.swipeForArchiveLabel.text = "Swipe down for archive"
+            self.swipeForArchiveLabel.textColor = .white
+            self.swipeForArchiveLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+            self.swipeForArchiveLabel.sizeToFit()
+            
+            self.releaseToArchiveLabel.text = "Release to archive"
+            self.releaseToArchiveLabel.textColor = .white
+            self.releaseToArchiveLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+            self.releaseToArchiveLabel.sizeToFit()
+            
+            self.swipeForArchiveLayer.colors = [
+                UIColor(red: 163.0/255.0, green: 168.0/255.0, blue: 176.0/255.0, alpha: 1.0).cgColor,
+                UIColor(red: 211.0/255.0, green: 209.0/255.0, blue: 217.0/255.0, alpha: 1.0).cgColor
+            ]
+            self.swipeForArchiveLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            self.swipeForArchiveLayer.endPoint = CGPoint(x: 1, y: 0.5)
+            
+            self.releaseToArchiveLayer.colors = [
+                UIColor(red: 17.0/255.0, green: 110.0/255.0, blue: 238.0/255.0, alpha: 1.0).cgColor,
+                UIColor(red: 101.0/255.0, green: 183.0/255.0, blue: 253.0/255.0, alpha: 1.0).cgColor
+            ]
+            self.releaseToArchiveLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            self.releaseToArchiveLayer.endPoint = CGPoint(x: 1, y: 0.5)
+            self.releaseToArchiveLayer.mask = self.releaseToArchiveMaskLayer
+            
+            self.clipsToBounds = true
+            
+            self.containerView.layer.addSublayer(self.swipeForArchiveLayer)
+            self.containerView.layer.addSublayer(self.releaseToArchiveLayer)
+            self.containerView.addSubview(self.capsuleView)
+            self.containerView.addSubview(self.arrowCircleView)
+            self.containerView.addSubview(self.arrowImageView)
+            self.containerView.addSubview(self.swipeForArchiveLabel)
+            self.containerView.addSubview(self.releaseToArchiveLabel)
+            self.containerView.addSubview(self.animationView)
+            
+            self.arrowCircleView.addSubview(self.arrowImageView)
+            
+            self.addSubview(self.containerView)
+        }
+        
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+        
+        func playSwipeAnimation() {
+            guard self.state == .swipeForArchive else { return }
+            self.state = .releaseToArchive
+            self.playAnimations(size: bounds.size)
+        }
+        
+        func playReleaseAnimation() {
+            guard self.state == .releaseToArchive else { return }
+            self.state = .swipeForArchive
+            self.playAnimations(size: bounds.size)
+        }
+        
+        func playArchiveAnimation(basedOn node: ChatListItemNode, completion: @escaping (() -> Void)) {
+            print("play archive animation", self.state)
+            guard self.state == .releaseToArchive else { return }
+            self.state = .releasedToArchive
+            
+            self.swipeForArchiveLayer.isHidden = true
+            
+            let minY = self.containerView.bounds.height - node.bounds.height
+            
+            let toPath = UIBezierPath(ovalIn: node.avatarContainerNode.frame.offsetBy(dx: 0, dy: minY))
+            self.releaseToArchiveMaskLayer.animate(
+                from: self.releaseToArchiveMaskLayer.path,
+                to: toPath.cgPath,
+                keyPath: "path",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4,
+                removeOnCompletion: false
+            )
+            self.releaseToArchiveMaskLayer.path = toPath.cgPath
+            
+            self.releaseToArchiveLabel.layer.animateAlpha(
+                from: 1.0,
+                to: 0.0,
+                duration: 0.2,
+                delay: 0.2,
+                removeOnCompletion: false,
+                completion: { _ in
+                    completion()
+                }
+            )
+            
+            self.releaseToArchiveLayer.animate(
+                from: self.releaseToArchiveLayer.colors as AnyObject,
+                to: [
+                    UIColor(red: 0.447059, green: 0.835294, blue: 0.992157, alpha: 1.0).cgColor,
+                    UIColor(red: 0.164706, green: 0.619608, blue: 0.945098, alpha: 1.0).cgColor
+                ] as AnyObject,
+                keyPath: "colors",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4,
+                removeOnCompletion: false
+            )
+            
+            self.releaseToArchiveLayer.animate(
+                from: self.releaseToArchiveLayer.locations as AnyObject,
+                to: [1.0 as NSNumber, 0.0 as NSNumber] as AnyObject,
+                keyPath: "locations",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4,
+                removeOnCompletion: false
+            )
+            
+            let capsuleToPosition = node.avatarContainerNode.layer.position.offsetBy(dx: 0, dy: minY)
+            let arrowSize = CGSize(width: 22.0, height: 22.0)
+            
+            self.capsuleView.layer.animatePosition(
+                from: self.capsuleView.layer.position,
+                to: capsuleToPosition,
+                duration: 0.2,
+                removeOnCompletion: false
+            )
+            self.capsuleView.layer.animateBounds(
+                from: self.capsuleView.bounds,
+                to: CGRect(origin: CGPoint.zero, size: arrowSize),
+                duration: 0.2,
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                removeOnCompletion: false,
+                completion: { [weak self] _ in
+                    self?.capsuleView.isHidden = true
+                }
+            )
+            self.capsuleView.frame = CGRect(origin: capsuleToPosition.offsetBy(dx: -arrowSize.width / 2, dy: -arrowSize.height / 2), size: arrowSize)
+            
+            let arrowCircleToPosition = node.avatarContainerNode.layer.position.offsetBy(dx: 0, dy: minY)
+            self.arrowCircleView.layer.animatePosition(
+                from: self.arrowCircleView.layer.position,
+                to: arrowCircleToPosition,
+                duration: 0.2,
+                removeOnCompletion: false,
+                completion: { [weak self] _ in
+                    guard let strongSelf = self else {
+                        return
+                    }
+                    strongSelf.arrowCircleView.isHidden = true
+                    let animationSize = strongSelf.animationView.update(
+                        transition: .immediate,
+                        component: AnyComponent(LottieAnimationComponent(
+                            animation: LottieAnimationComponent.AnimationItem(
+                                name: "archive_reveal",
+                                mode: .animating(loop: false)
+                            ),
+                            colors: [
+                                "Box.box1.Fill 1": UIColor.white,
+                                "Cap.cap1.Fill 1": UIColor.white,
+                                "Cap.cap2.Fill 1": UIColor.white,
+                                "Arrow 1.Arrow 1.Stroke 1": UIColor(red: 101.0/255.0, green: 183.0/255.0, blue: 253.0/255.0, alpha: 1.0),
+                                "Arrow 2.Arrow 2.Stroke 1": UIColor(red: 101.0/255.0, green: 183.0/255.0, blue: 253.0/255.0, alpha: 1.0)
+                            ],
+                            size: node.avatarContainerNode.bounds.size
+                        )),
+                        environment: {},
+                        containerSize: node.avatarContainerNode.bounds.size
+                    )
+                    strongSelf.animationView.frame = CGRect(origin: node.avatarContainerNode.frame.origin.offsetBy(dx: 0.0, dy: minY), size: animationSize)
+                }
+            )
+            self.arrowCircleView.frame = CGRect(origin: arrowCircleToPosition.offsetBy(dx: -arrowSize.width / 2, dy: -arrowSize.height / 2), size: arrowSize)
+        }
+        
+        private func playAnimations(size: CGSize) {
+            print("play animations")
+            self.playArrowAnimation()
+            self.playCircularAnimation()
+            self.playLabelsAnimation(size: size)
+        }
+        
+        private func playArrowAnimation() {
+            let fromRotation: Double
+            let toRotation: Double
+            let fromColor: UIColor
+            let toColor: UIColor
+            if self.state == .releaseToArchive {
+                fromRotation = 0.0
+                toRotation = -Double.pi
+                fromColor = UIColor(red: 163.0/255.0, green: 168.0/255.0, blue: 176.0/255.0, alpha: 1.0)
+                toColor = UIColor(red: 17.0/255.0, green: 110.0/255.0, blue: 238.0/255.0, alpha: 1.0)
+            } else {
+                fromRotation = -Double.pi
+                toRotation = 0.0
+                fromColor = UIColor(red: 17.0/255.0, green: 110.0/255.0, blue: 238.0/255.0, alpha: 1.0)
+                toColor = UIColor(red: 163.0/255.0, green: 168.0/255.0, blue: 176.0/255.0, alpha: 1.0)
+            }
+            
+            self.arrowImageView.layer.animateRotation(
+                from: fromRotation,
+                to: toRotation,
+                duration: 0.4
+            )
+            self.arrowImageView.layer.animate(
+                from: fromColor.cgColor,
+                to: toColor.cgColor,
+                keyPath: "contentsMultiplyColor",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4
+            )
+            self.arrowImageView.transform = CGAffineTransform(rotationAngle: toRotation)
+            self.arrowImageView.tintColor = toColor
+        }
+        
+        private func playCircularAnimation() {
+            let size = max(self.containerView.bounds.width, self.containerView.bounds.height)
+            let fromPath: UIBezierPath
+            let toPath: UIBezierPath
+            if self.state == .releaseToArchive {
+                fromPath = UIBezierPath(ovalIn: CGRect(origin: self.arrowCircleView.center, size: .zero))
+                toPath = UIBezierPath(ovalIn: self.arrowCircleView.frame.insetBy(dx: -size, dy: -size))
+            } else {
+                fromPath = UIBezierPath(ovalIn: self.arrowCircleView.frame.insetBy(dx: -size, dy: -size))
+                toPath = UIBezierPath(ovalIn: CGRect(origin: self.arrowCircleView.center, size: .zero))
+            }
+            
+            self.releaseToArchiveMaskLayer.animate(
+                from: fromPath.cgPath,
+                to: toPath.cgPath,
+                keyPath: "path",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.6
+            )
+            self.releaseToArchiveMaskLayer.path = toPath.cgPath
+        }
+        
+        private func playLabelsAnimation(size: CGSize) {
+            let swipeLabelMoveFromValue: Double
+            let swipeLabelMoveToValue: Double
+            let releaseLabelMoveFromValue: Double
+            let releaseLabelMoveToValue: Double
+            let swipeLabelOriginX: Double
+            let releaseLabelOriginX: Double
+            let swipeLabelOpacityFromValue: Double
+            let swipeLabelOpacityToValue: Double
+            let releaseLabelOpacityFromValue: Double
+            let releaseLabelOpacityToValue: Double
+            if self.state == .releaseToArchive {
+                swipeLabelMoveFromValue = self.swipeForArchiveLabel.center.x
+                swipeLabelMoveToValue = size.width + self.swipeForArchiveLabel.bounds.width / 2
+                releaseLabelMoveFromValue = self.releaseToArchiveLabel.center.x
+                releaseLabelMoveToValue = size.width / 2
+                swipeLabelOriginX = size.width
+                releaseLabelOriginX = (size.width - self.releaseToArchiveLabel.bounds.width) / 2
+                swipeLabelOpacityFromValue = 1.0
+                swipeLabelOpacityToValue = 0.0
+                releaseLabelOpacityFromValue = 0.0
+                releaseLabelOpacityToValue = 1.0
+            } else {
+                swipeLabelMoveFromValue = self.swipeForArchiveLabel.center.x
+                swipeLabelMoveToValue = size.width / 2
+                releaseLabelMoveFromValue = self.releaseToArchiveLabel.center.x
+                releaseLabelMoveToValue = -self.releaseToArchiveLabel.bounds.width / 2
+                swipeLabelOriginX = (size.width - self.swipeForArchiveLabel.bounds.width) / 2
+                releaseLabelOriginX = -self.releaseToArchiveLabel.bounds.width
+                swipeLabelOpacityFromValue = 0.0
+                swipeLabelOpacityToValue = 1.0
+                releaseLabelOpacityFromValue = 1.0
+                releaseLabelOpacityToValue = 0.0
+            }
+            
+            self.swipeForArchiveLabel.layer.animate(
+                from: swipeLabelMoveFromValue as NSNumber,
+                to: swipeLabelMoveToValue as NSNumber,
+                keyPath: "position.x",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4
+            )
+            self.swipeForArchiveLabel.layer.animate(
+                from: swipeLabelOpacityFromValue as NSNumber,
+                to: swipeLabelOpacityToValue as NSNumber,
+                keyPath: "opacity",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4
+            )
+            self.swipeForArchiveLabel.frame.origin.x = swipeLabelOriginX
+            
+            self.releaseToArchiveLabel.layer.animate(
+                from: releaseLabelMoveFromValue as NSNumber,
+                to: releaseLabelMoveToValue as NSNumber,
+                keyPath: "position.x",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4
+            )
+            self.releaseToArchiveLabel.layer.animate(
+                from: releaseLabelOpacityFromValue as NSNumber,
+                to: releaseLabelOpacityToValue as NSNumber,
+                keyPath: "opacity",
+                timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+                duration: 0.4
+            )
+            self.releaseToArchiveLabel.frame.origin.x = releaseLabelOriginX
+        }
+        
+        func update(component: ChatListOverscrollArchiveComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+            let avatarCenterX = component.avatarFrame.midX
+            let avatarCenterY = component.avatarFrame.midY
+            let verticalMinInset = component.avatarFrame.minY
+            let avatarSize = min(component.avatarFrame.width, component.avatarFrame.height)
+            
+            let arrowCircleSize = avatarSize * 0.33
+            let arrowImageSize = arrowCircleSize * 0.5
+            let containerHeight = 1000.0
+            let minY = containerHeight - availableSize.height
+            let maxY = containerHeight
+            
+            self.containerView.frame = CGRect(
+                x: 0.0,
+                y: availableSize.height - containerHeight,
+                width: availableSize.width,
+                height: containerHeight
+            )
+            
+            if self.state == .releasedToArchive {
+                self.capsuleView.frame = CGRect(
+                    x: avatarCenterX - arrowCircleSize / 2.0,
+                    y: minY + avatarCenterY,
+                    width: arrowCircleSize,
+                    height: arrowCircleSize
+                )
+                self.arrowCircleView.frame = CGRect(
+                    x: avatarCenterX - arrowCircleSize / 2.0,
+                    y: avatarCenterY,
+                    width: arrowCircleSize,
+                    height: arrowCircleSize
+                )
+            } else {
+                self.capsuleView.frame = CGRect(
+                    x: avatarCenterX - arrowCircleSize / 2.0,
+                    y: minY + verticalMinInset,
+                    width: arrowCircleSize,
+                    height: max(0.0, availableSize.height - verticalMinInset * 2)
+                )
+                self.arrowCircleView.frame = CGRect(
+                    x: avatarCenterX - arrowCircleSize / 2.0,
+                    y: maxY - arrowCircleSize - verticalMinInset,
+                    width: arrowCircleSize,
+                    height: arrowCircleSize
+                )
+            }
+            self.capsuleView.layer.cornerRadius = arrowCircleSize / 2
+            self.arrowCircleView.layer.cornerRadius = arrowCircleSize / 2
+            
+            self.arrowImageView.frame = CGRect(
+                x: (self.arrowCircleView.bounds.width - arrowImageSize) / 2,
+                y: (self.arrowCircleView.bounds.height - arrowImageSize) / 2,
+                width: arrowImageSize,
+                height: arrowImageSize
+            )
+            
+            let swipeLabelMinY = maxY - verticalMinInset - self.swipeForArchiveLabel.bounds.height - 2.0
+            let releaseLabelMinY = maxY - verticalMinInset - self.releaseToArchiveLabel.bounds.height - 2.0
+            switch self.state {
+                case .releaseToArchive, .releasedToArchive:
+                    self.swipeForArchiveLabel.frame.origin = CGPoint(
+                        x: availableSize.width,
+                        y: swipeLabelMinY
+                    )
+                    self.releaseToArchiveLabel.frame.origin = CGPoint(
+                        x: (availableSize.width - self.releaseToArchiveLabel.bounds.width) / 2,
+                        y: releaseLabelMinY
+                    )
+                case .swipeForArchive:
+                    self.swipeForArchiveLabel.frame.origin = CGPoint(
+                        x: (availableSize.width - self.swipeForArchiveLabel.bounds.width) / 2,
+                        y: swipeLabelMinY
+                    )
+                    self.releaseToArchiveLabel.frame.origin = CGPoint(
+                        x: -self.releaseToArchiveLabel.bounds.width,
+                        y: releaseLabelMinY
+                    )
+            }
+            
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.swipeForArchiveLayer.frame = self.containerView.bounds
+            self.releaseToArchiveLayer.frame = self.containerView.bounds
+            CATransaction.commit()
+            
+            return availableSize
+        }
+    }
+    
+    func makeView() -> View {
+        return View(frame: CGRect())
+    }
+    
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+        return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
+    }
 }

@@ -12,6 +12,8 @@ public protocol ChatListController: ViewController {
     var context: AccountContext { get }
     var lockViewFrame: CGRect? { get }
     
+//    var previewTransitionContext: ControllerPreviewTransitionContext? { get }
+    
     var isSearchActive: Bool { get }
     func activateSearch(filter: ChatListSearchFilter, query: String?)
     func deactivateSearch(animated: Bool)

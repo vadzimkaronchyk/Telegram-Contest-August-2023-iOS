@@ -652,10 +652,87 @@ public protocol PeerInfoScreen: ViewController {
     var peerId: PeerId { get }
 }
 
+//public protocol ContextPreviewAnimatable: AnyObject {
+//    var isHidden: Bool { get set }
+//    var frame: CGRect { get set }
+//    var bounds: CGRect { get set }
+//    func snapshotView(afterScreenUpdates: Bool) -> UIView?
+//    func convert(_ rect: CGRect, toView: Any?) -> CGRect
+//    func convert(_ point: CGPoint, toView: Any?) -> CGPoint
+//    func convert(_ rect: CGRect, fromView: Any?) -> CGRect
+//    func convert(_ point: CGPoint, fromView: Any?) -> CGPoint
+//}
+//
+//extension UIView: ContextPreviewAnimatable {
+//    
+//    public func convert(_ rect: CGRect, toView: Any?) -> CGRect {
+//        let view = toView as? UIView
+//        return self.convert(rect, to: view)
+//    }
+//    
+//    public func convert(_ point: CGPoint, toView: Any?) -> CGPoint {
+//        let view = toView as? UIView
+//        return self.convert(point, to: view)
+//    }
+//    
+//    public func convert(_ rect: CGRect, fromView: Any?) -> CGRect {
+//        let view = fromView as? UIView
+//        return self.convert(rect, from: view)
+//    }
+//    
+//    public func convert(_ point: CGPoint, fromView: Any?) -> CGPoint {
+//        let view = fromView as? UIView
+//        return self.convert(point, from: view)
+//    }
+//}
+//
+//extension ASDisplayNode: ContextPreviewAnimatable {
+//    
+//    public func convert(_ rect: CGRect, toView: Any?) -> CGRect {
+//        let view = toView as? ASDisplayNode
+//        return self.convert(rect, to: view)
+//    }
+//    
+//    public func convert(_ point: CGPoint, toView: Any?) -> CGPoint {
+//        let view = toView as? ASDisplayNode
+//        return self.convert(point, to: view)
+//    }
+//    
+//    public func convert(_ rect: CGRect, fromView: Any?) -> CGRect {
+//        let view = fromView as? ASDisplayNode
+//        return self.convert(rect, from: view)
+//    }
+//    
+//    public func convert(_ point: CGPoint, fromView: Any?) -> CGPoint {
+//        let view = fromView as? ASDisplayNode
+//        return self.convert(point, from: view)
+//    }
+//
+//    public func snapshotView(afterScreenUpdates: Bool) -> UIView? {
+//        return isLayerBacked ? layer.snapshotContentTreeAsView() : view.snapshotView(afterScreenUpdates: afterScreenUpdates)
+//    }
+//}
+
+public struct ControllerPreviewTransitionContext {
+    public let navigationBarView: ASDisplayNode
+    public let navigationBarBackgroundView: ASDisplayNode
+    public let titleView: UIView
+    public let avatarView: ASDisplayNode
+    
+    public init(navigationBarView: ASDisplayNode, navigationBarBackgroundView: ASDisplayNode, titleView: UIView, avatarView: ASDisplayNode) {
+        self.navigationBarView = navigationBarView
+        self.navigationBarBackgroundView = navigationBarBackgroundView
+        self.titleView = titleView
+        self.avatarView = avatarView
+    }
+}
+
 public protocol ChatController: ViewController {
     var chatLocation: ChatLocation { get }
     var canReadHistory: ValuePromise<Bool> { get }
     var parentController: ViewController? { get set }
+    
+    var previewTransitionContext: ControllerPreviewTransitionContext? { get }
     
     var purposefulAction: (() -> Void)? { get set }
     

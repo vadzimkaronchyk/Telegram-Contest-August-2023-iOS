@@ -68,8 +68,8 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
                 }
                 
                 let scaleSide = targetContentRect.width
-                let minScale: CGFloat = max(0.7, (scaleSide - 15.0) / scaleSide)
-                let currentScale = 1.0 * (1.0 - progress) + minScale * progress
+                let maxScale: CGFloat = min(1.3, (scaleSide + 15.0) / scaleSide)
+                let currentScale = 1.0 * (1.0 - progress) + maxScale * progress
                 
                 let originalCenterOffsetX: CGFloat = targetNode.bounds.width / 2.0 - targetContentRect.midX
                 let scaledCenterOffsetX: CGFloat = originalCenterOffsetX * currentScale

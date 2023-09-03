@@ -55,6 +55,7 @@ public final class StoryPeerListComponent: Component {
     public let storySubscriptions: EngineStorySubscriptions?
     public let collapseFraction: CGFloat
     public let unlocked: Bool
+    public let expandable: Bool
     public let uploadProgress: Float?
     public let peerAction: (EnginePeer?) -> Void
     public let contextPeerAction: (ContextExtractedContentContainingNode, ContextGesture, EnginePeer) -> Void
@@ -77,6 +78,7 @@ public final class StoryPeerListComponent: Component {
         storySubscriptions: EngineStorySubscriptions?,
         collapseFraction: CGFloat,
         unlocked: Bool,
+        expandable: Bool,
         uploadProgress: Float?,
         peerAction: @escaping (EnginePeer?) -> Void,
         contextPeerAction: @escaping (ContextExtractedContentContainingNode, ContextGesture, EnginePeer) -> Void,
@@ -98,6 +100,7 @@ public final class StoryPeerListComponent: Component {
         self.storySubscriptions = storySubscriptions
         self.collapseFraction = collapseFraction
         self.unlocked = unlocked
+        self.expandable = expandable
         self.uploadProgress = uploadProgress
         self.peerAction = peerAction
         self.contextPeerAction = contextPeerAction
@@ -146,6 +149,9 @@ public final class StoryPeerListComponent: Component {
             return false
         }
         if lhs.unlocked != rhs.unlocked {
+            return false
+        }
+        if lhs.expandable != rhs.expandable {
             return false
         }
         if lhs.uploadProgress != rhs.uploadProgress {
@@ -326,7 +332,7 @@ public final class StoryPeerListComponent: Component {
         
         private var titleLockView: ChatListTitleLockView?
         private var titleLockButton: HighlightTrackingButton?
-        private let titleView: UIImageView
+        public let titleView: UIImageView
         private var titleState: TitleState?
         private var titleViewAnimation: TitleAnimationState?
         
@@ -354,7 +360,6 @@ public final class StoryPeerListComponent: Component {
         private var currentActivityFraction: CGFloat = 0.0
         
         public private(set) var overscrollSelectedId: EnginePeer.Id?
-        public private(set) var overscrollHiddenChatItemsAllowed: Bool = false
         
         private var anchorForTooltipRect: CGRect?
         
@@ -832,14 +837,8 @@ public final class StoryPeerListComponent: Component {
                 }
             }
             
-            if overscrollStage1 >= 0.5 {
-                self.overscrollHiddenChatItemsAllowed = true
-            } else {
-                self.overscrollHiddenChatItemsAllowed = false
-            }
-            
             //print("overscrollStage2: \(overscrollStage2)")
-            if let overscrollFocusIndex, overscrollStage2 >= 1.19 {
+            if let overscrollFocusIndex, overscrollStage2 >= 1.19, component.expandable {
                 self.overscrollSelectedId = self.sortedItems[overscrollFocusIndex].peer.id
             } else {
                 self.overscrollSelectedId = nil
@@ -881,7 +880,7 @@ public final class StoryPeerListComponent: Component {
                 let minimizedMaxItemScale: CGFloat = (24.0 + 4.0) / 52.0
                 
                 let overscrollScaleFactor: CGFloat
-                if index == overscrollFocusIndex {
+                if index == overscrollFocusIndex || !component.expandable {
                     overscrollScaleFactor = 1.0
                 } else {
                     overscrollScaleFactor = 0.0

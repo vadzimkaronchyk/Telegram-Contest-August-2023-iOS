@@ -79,6 +79,913 @@ private final class ContextControllerContentSourceImpl: ContextControllerContent
     }
 }
 
+private final class ContextControllerWithTransitionContentSourceImpl: ContextControllerWithTransitionContentSource {
+    let fromController: ViewController
+    let toController: ViewController
+    weak var sourceNode: ASDisplayNode?
+        
+    let passthroughTouches: Bool = true
+    
+    init(fromController: ViewController, toController: ViewController, sourceNode: ASDisplayNode?) {
+        self.fromController = fromController
+        self.toController = toController
+        self.sourceNode = sourceNode
+    }
+    
+    func transitionInfo() -> ContextControllerTakeControllerInfo? {
+        let sourceNode = self.sourceNode
+        return ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceNode] in
+            if let sourceNode = sourceNode {
+                return (sourceNode.view, sourceNode.bounds)
+            } else {
+                return nil
+            }
+        })
+    }
+    
+    func animateInTransition(on contextController: ViewControllerTracingNode, contentContainerNode: ASDisplayNode, controllerContentNode: ASDisplayNode, with duration: CGFloat) {
+        guard let itemContextNode = self.sourceNode as? ContextControllerSourceNode, let itemNode = itemContextNode.supernode as? ChatListItemNode else {
+            return
+        }
+        
+        guard let itemAvatarSnapshotView = itemNode.avatarContainerNode.view.snapshotView(afterScreenUpdates: false), let itemBackgroundSnapshotView = itemNode.backgroundNode.layer.snapshotContentTreeAsView() else {
+            return
+        }
+        
+        itemNode.avatarContainerNode.isHidden = true
+        itemNode.backgroundNode.isHidden = true
+        itemNode.separatorNode.isHidden = true
+        guard let itemSnapshotView = itemNode.view.snapshotView(afterScreenUpdates: true) else {
+            itemNode.avatarContainerNode.isHidden = false
+            itemNode.backgroundNode.isHidden = false
+            itemNode.separatorNode.isHidden = false
+            return
+        }
+        itemNode.avatarContainerNode.isHidden = false
+        itemNode.backgroundNode.isHidden = false
+        itemNode.separatorNode.isHidden = false
+        
+        guard let transitionContext = (self.toController as? ChatController)?.previewTransitionContext else {
+            return
+        }
+        
+        guard let navigationAvatarSnapshotView = transitionContext.avatarView.view.snapshotView(afterScreenUpdates: true) else {
+            return
+        }
+        
+        transitionContext.avatarView.isHidden = true
+        transitionContext.navigationBarBackgroundView.isHidden = true
+        guard let navigationContentSnapshotView = transitionContext.navigationBarView.view.snapshotView(afterScreenUpdates: true) else {
+            transitionContext.avatarView.isHidden = false
+            transitionContext.navigationBarBackgroundView.isHidden = false
+            return
+        }
+        transitionContext.avatarView.isHidden = false
+        transitionContext.navigationBarBackgroundView.isHidden = false
+        
+        guard let navigationBackgroundSnapshotView = transitionContext.navigationBarBackgroundView.view.snapshotView(afterScreenUpdates: true) else {
+            return
+        }
+        
+        let cornerRadius = contentContainerNode.cornerRadius
+        let itemBackgroundColor = itemNode.backgroundNode.backgroundColor
+        
+        let containerView = UIView()
+        
+        let toControllerContainerView = UIView()
+        
+        let toControllerOverlayView = UIView()
+        toControllerOverlayView.backgroundColor = itemBackgroundColor
+        
+        var toControllerOverlayAnimationFinished = false
+        var navigationAvatarAnimationFinished = false
+        var itemBackgroundAnimationFinished = false
+        var itemAnimationFinished = false
+        var itemAvatarAnimationFinished = false
+        var navigationContentAnimationFinished = false
+        var navigationBackgroundAnimationFinished = false
+        let removeCompletion = {
+            guard toControllerOverlayAnimationFinished, navigationAvatarAnimationFinished, itemBackgroundAnimationFinished, itemAnimationFinished, itemAvatarAnimationFinished, navigationContentAnimationFinished, navigationBackgroundAnimationFinished else {
+                return
+            }
+            toControllerContainerView.removeFromSuperview()
+            containerView.removeFromSuperview()
+        }
+        
+        contextController.view.addSubview(containerView)
+        
+        contentContainerNode.view.addSubview(toControllerContainerView)
+        
+        toControllerContainerView.addSubview(toControllerOverlayView)
+        toControllerContainerView.addSubview(itemBackgroundSnapshotView)
+        toControllerContainerView.addSubview(navigationBackgroundSnapshotView)
+        toControllerContainerView.addSubview(itemSnapshotView)
+        toControllerContainerView.addSubview(itemAvatarSnapshotView)
+        toControllerContainerView.addSubview(navigationContentSnapshotView)
+        toControllerContainerView.addSubview(navigationAvatarSnapshotView)
+        
+        containerView.frame = contextController.bounds
+        
+        let toControllerOverlayFrame = contentContainerNode.bounds
+        toControllerContainerView.frame = toControllerOverlayFrame
+        toControllerOverlayView.frame = toControllerContainerView.bounds
+        
+        let itemFrame = contextController.convert(itemNode.frame, from: itemNode.supernode)
+        let itemPosition = contextController.convert(itemNode.position, from: itemNode.supernode)
+        
+        let toControllerSize = contentContainerNode.frame.size
+        let toControllerPosition = contentContainerNode.position
+        let toControllerFromScaleX = itemFrame.width / toControllerSize.width
+        
+        let navigationFrame = transitionContext.navigationBarView.view.convert(transitionContext.navigationBarView.frame, to: toControllerContainerView)
+        
+        let itemTitleFrame = itemNode.titleNode.convert(itemNode.titleNode.frame, to: itemNode)
+        let navigationTitleFrame = transitionContext.titleView.convert(transitionContext.titleView.frame, to: transitionContext.navigationBarView.view)
+        let titleOffsetX = (navigationTitleFrame.midX - itemTitleFrame.midX) / 2
+        let titleOffsetY = (itemTitleFrame.midY - navigationTitleFrame.midY) / 2
+        
+        animateInToControllerView(
+            contentContainerNode: contentContainerNode,
+            overlayView: toControllerOverlayView,
+            positions: (itemPosition, toControllerPosition),
+            heights: (itemFrame.height, toControllerSize.height),
+            scales: (toControllerFromScaleX, 1.0),
+            cornerRadiuses: (0.0, cornerRadius),
+            duration: duration,
+            completion: {
+                toControllerOverlayAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemBackgroundFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let itemBackgroundToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        itemBackgroundSnapshotView.frame = itemBackgroundFromFrame
+        let itemBackgroundFromPosition = itemBackgroundFromFrame.center
+        let itemBackgroundToPosition = itemBackgroundToFrame.center
+        let itemBackgroundToScaleX = itemBackgroundToFrame.width / itemBackgroundFromFrame.width
+        let itemBackgroundToScaleY = itemBackgroundToFrame.height / itemBackgroundFromFrame.height
+        animateInItemBackgroundView(
+            backgroundView: itemBackgroundSnapshotView,
+            positions: (itemBackgroundFromPosition, itemBackgroundToPosition),
+            scalesX: (1.0, itemBackgroundToScaleX),
+            scalesY: (1.0, itemBackgroundToScaleY),
+            duration: duration,
+            completion: {
+                itemBackgroundAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationBackgroundFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let navigationBackgroundToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        navigationBackgroundSnapshotView.frame = navigationBackgroundToFrame
+        let navigationBackgroundFromPosition = navigationBackgroundFromFrame.center
+        let navigationBackgroundToPosition = navigationBackgroundToFrame.center
+        let navigationBackgroundFromScaleX = navigationBackgroundFromFrame.width / navigationBackgroundToFrame.width
+        let navigationBackgroundFromScaleY = navigationBackgroundFromFrame.height / navigationBackgroundToFrame.height
+        animateInNavigationBackgroundView(
+            backgroundView: navigationBackgroundSnapshotView,
+            positions: (navigationBackgroundFromPosition, navigationBackgroundToPosition),
+            scalesX: (navigationBackgroundFromScaleX, 1.0),
+            scalesY: (navigationBackgroundFromScaleY, 1.0),
+            duration: duration,
+            completion: {
+                navigationBackgroundAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let itemToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        itemSnapshotView.frame = itemFromFrame
+        let itemFromPosition = itemFromFrame.center
+        let itemToPosition = itemToFrame.center.offsetBy(
+            dx: titleOffsetX,
+            dy: titleOffsetY
+        )
+        animateInItemView(
+            itemView: itemSnapshotView,
+            positions: (itemFromPosition, itemToPosition),
+            duration: duration,
+            completion: {
+                itemAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemAvatarFromFrame = itemNode.avatarContainerNode.frame
+        itemAvatarSnapshotView.frame = itemAvatarFromFrame
+        let itemAvatarFromPosition = itemAvatarFromFrame.center
+        let itemAvatarToPosition = CGPoint(
+            x: itemAvatarFromFrame.maxX,
+            y: itemAvatarFromFrame.maxY
+        )
+        animateInItemAvatarView(
+            avatarView: itemAvatarSnapshotView,
+            positions: (itemAvatarFromPosition, itemAvatarToPosition),
+            scales: (1.0, 0.5),
+            duration: duration,
+            completion: {
+                itemAvatarAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationContentFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let navigationContentToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        navigationContentSnapshotView.frame = navigationContentToFrame
+        let navigationContentFromPosition = navigationContentFromFrame.center.offsetBy(
+            dx: -titleOffsetX,
+            dy: -titleOffsetY
+        )
+        let navigationContentToPosition = navigationContentToFrame.center
+        animateInNavigationContentView(
+            contentView: navigationContentSnapshotView,
+            positions: (navigationContentFromPosition, navigationContentToPosition),
+            duration: duration,
+            completion: {
+                navigationContentAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationAvatarFrame = transitionContext.avatarView.view.convert(transitionContext.avatarView.frame, to: toControllerContainerView)
+        navigationAvatarSnapshotView.frame = navigationAvatarFrame
+        animateInNavigationAvatarView(
+            avatarView: navigationAvatarSnapshotView,
+            scales: (0.5, 1.0),
+            duration: duration,
+            completion: {
+                navigationAvatarAnimationFinished = true
+                removeCompletion()
+            }
+        )
+    }
+    
+    private func animateInToControllerView(
+        contentContainerNode: ASDisplayNode,
+        overlayView: UIView,
+        positions: (CGPoint, CGPoint),
+        heights: (CGFloat, CGFloat),
+        scales: (CGFloat, CGFloat),
+        cornerRadiuses: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        contentContainerNode.layer.animate(
+            from: cornerRadiuses.0 as NSNumber,
+            to: cornerRadiuses.1 as NSNumber,
+            keyPath: "cornerRadius",
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+            duration: duration
+        )
+        contentContainerNode.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue
+        )
+        contentContainerNode.layer.animateHeight(
+            from: heights.0,
+            to: heights.1,
+            duration: duration,
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue
+        )
+        contentContainerNode.layer.animateScaleX(
+            from: scales.0,
+            to: scales.1,
+            duration: duration
+        )
+        overlayView.layer.animateAlpha(
+            from: 0.9,
+            to: 0.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInItemBackgroundView(
+        backgroundView: UIView,
+        positions: (CGPoint, CGPoint),
+        scalesX: (CGFloat, CGFloat),
+        scalesY: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        backgroundView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleX(
+            from: scalesX.0,
+            to: scalesX.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleY(
+            from: scalesY.0,
+            to: scalesY.1,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInNavigationBackgroundView(
+        backgroundView: UIView,
+        positions: (CGPoint, CGPoint),
+        scalesX: (CGFloat, CGFloat),
+        scalesY: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        backgroundView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleX(
+            from: scalesX.0,
+            to: scalesX.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleY(
+            from: scalesY.0,
+            to: scalesY.1,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInItemView(
+        itemView: UIView,
+        positions: (CGPoint, CGPoint),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        itemView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        itemView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration * 0.5,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInItemAvatarView(
+        avatarView: UIView,
+        positions: (CGPoint, CGPoint),
+        scales: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        avatarView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateScale(
+            from: scales.0,
+            to: scales.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInNavigationContentView(
+        contentView: UIView,
+        positions: (CGPoint, CGPoint),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        contentView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        contentView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateInNavigationAvatarView(
+        avatarView: UIView,
+        scales: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        avatarView.layer.animateScale(
+            from: scales.0,
+            to: scales.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    func animateOutTransition(on contextController: ViewControllerTracingNode, contentContainerNode: ASDisplayNode, controllerContentNode: ASDisplayNode, with duration: CGFloat) {
+        guard let itemContextNode = self.sourceNode as? ContextControllerSourceNode, let itemNode = itemContextNode.supernode as? ChatListItemNode else {
+            return
+        }
+        
+        guard let itemAvatarSnapshotView = itemNode.avatarContainerNode.view.snapshotView(afterScreenUpdates: false), let itemBackgroundSnapshotView = itemNode.backgroundNode.layer.snapshotContentTreeAsView() else {
+            return
+        }
+        
+        itemNode.avatarContainerNode.isHidden = true
+        itemNode.backgroundNode.isHidden = true
+        itemNode.separatorNode.isHidden = true
+        guard let itemSnapshotView = itemNode.view.snapshotView(afterScreenUpdates: true) else {
+            itemNode.avatarContainerNode.isHidden = false
+            itemNode.backgroundNode.isHidden = false
+            itemNode.separatorNode.isHidden = false
+            return
+        }
+        itemNode.avatarContainerNode.isHidden = false
+        itemNode.backgroundNode.isHidden = false
+        itemNode.separatorNode.isHidden = false
+        
+        guard let transitionContext = (self.toController as? ChatController)?.previewTransitionContext else {
+            return
+        }
+        
+        guard let navigationAvatarSnapshotView = transitionContext.avatarView.view.snapshotView(afterScreenUpdates: true) else {
+            return
+        }
+        
+        transitionContext.avatarView.isHidden = true
+        transitionContext.navigationBarBackgroundView.isHidden = true
+        guard let navigationContentSnapshotView = transitionContext.navigationBarView.view.snapshotView(afterScreenUpdates: true) else {
+            transitionContext.avatarView.isHidden = false
+            transitionContext.navigationBarBackgroundView.isHidden = false
+            return
+        }
+        transitionContext.avatarView.isHidden = false
+        transitionContext.navigationBarBackgroundView.isHidden = false
+        
+        guard let navigationBackgroundSnapshotView = transitionContext.navigationBarBackgroundView.view.snapshotView(afterScreenUpdates: true) else {
+            return
+        }
+        
+        let cornerRadius = contentContainerNode.cornerRadius
+        let itemBackgroundColor = itemNode.backgroundNode.backgroundColor
+        
+        let containerView = UIView()
+        
+        let toControllerContainerView = UIView()
+        
+        let toControllerOverlayView = UIView()
+        toControllerOverlayView.backgroundColor = itemBackgroundColor
+        
+        var toControllerOverlayAnimationFinished = false
+        var navigationAvatarAnimationFinished = false
+        var itemBackgroundAnimationFinished = false
+        var itemAnimationFinished = false
+        var itemAvatarAnimationFinished = false
+        var navigationContentAnimationFinished = false
+        var navigationBackgroundAnimationFinished = false
+        transitionContext.avatarView.isHidden = true
+        let removeCompletion = {
+            guard toControllerOverlayAnimationFinished, navigationAvatarAnimationFinished, itemBackgroundAnimationFinished, itemAnimationFinished, itemAvatarAnimationFinished, navigationContentAnimationFinished, navigationBackgroundAnimationFinished else {
+                return
+            }
+            transitionContext.avatarView.isHidden = false
+            toControllerContainerView.removeFromSuperview()
+            containerView.removeFromSuperview()
+        }
+        
+        contextController.view.addSubview(containerView)
+        
+        contentContainerNode.view.addSubview(toControllerContainerView)
+        
+        toControllerContainerView.addSubview(toControllerOverlayView)
+        toControllerContainerView.addSubview(navigationBackgroundSnapshotView)
+        toControllerContainerView.addSubview(navigationContentSnapshotView)
+        toControllerContainerView.addSubview(navigationAvatarSnapshotView)
+        toControllerContainerView.addSubview(itemBackgroundSnapshotView)
+        toControllerContainerView.addSubview(itemSnapshotView)
+        toControllerContainerView.addSubview(itemAvatarSnapshotView)
+        
+        containerView.frame = contextController.bounds
+        
+        let toControllerOverlayFrame = contentContainerNode.bounds
+        toControllerContainerView.frame = toControllerOverlayFrame
+        toControllerOverlayView.frame = toControllerContainerView.bounds
+        
+        let itemFrame = contextController.convert(itemNode.frame, from: itemNode.supernode)
+        let itemPosition = contextController.convert(itemNode.position, from: itemNode.supernode)
+        
+        let toControllerSize = contentContainerNode.frame.size
+        let toControllerPosition = contentContainerNode.position
+        let toControllerToScaleX = itemFrame.width / toControllerSize.width
+        
+        let navigationFrame = transitionContext.navigationBarView.view.convert(transitionContext.navigationBarView.frame, to: toControllerContainerView)
+        
+        let itemTitleFrame = itemNode.titleNode.convert(itemNode.titleNode.frame, to: itemNode)
+        let navigationTitleFrame = transitionContext.titleView.convert(transitionContext.titleView.frame, to: transitionContext.navigationBarView.view)
+        let titleOffsetX = (navigationTitleFrame.midX - itemTitleFrame.midX) / 2
+        let titleOffsetY = (itemTitleFrame.midY - navigationTitleFrame.midY) / 2
+        
+        animateOutToControllerView(
+            contentContainerNode: contentContainerNode,
+            overlayView: toControllerOverlayView,
+            positions: (toControllerPosition, itemPosition),
+            heights: (toControllerSize.height, itemFrame.height),
+            scales: (1.0, toControllerToScaleX),
+            cornerRadiuses: (cornerRadius, 0.0),
+            duration: duration,
+            completion: {
+                toControllerOverlayAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemBackgroundFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let itemBackgroundToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        itemBackgroundSnapshotView.frame = itemBackgroundFromFrame
+        let itemBackgroundToPosition = itemBackgroundFromFrame.center
+        let itemBackgroundFromPosition = itemBackgroundToFrame.center
+        let itemBackgroundFromScaleX = itemBackgroundToFrame.width / itemBackgroundFromFrame.width
+        let itemBackgroundFromScaleY = itemBackgroundToFrame.height / itemBackgroundFromFrame.height
+        animateOutItemBackgroundView(
+            backgroundView: itemBackgroundSnapshotView,
+            positions: (itemBackgroundFromPosition, itemBackgroundToPosition),
+            scalesX: (itemBackgroundFromScaleX, 1.0),
+            scalesY: (itemBackgroundFromScaleY, 1.0),
+            duration: duration,
+            completion: {
+                itemBackgroundAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationBackgroundFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let navigationBackgroundToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        navigationBackgroundSnapshotView.frame = navigationBackgroundToFrame
+        let navigationBackgroundToPosition = navigationBackgroundFromFrame.center
+        let navigationBackgroundFromPosition = navigationBackgroundToFrame.center
+        let navigationBackgroundFromScaleX = navigationBackgroundFromFrame.width / navigationBackgroundToFrame.width
+        let navigationBackgroundFromScaleY = navigationBackgroundFromFrame.height / navigationBackgroundToFrame.height
+        animateOutNavigationBackgroundView(
+            backgroundView: navigationBackgroundSnapshotView,
+            positions: (navigationBackgroundFromPosition, navigationBackgroundToPosition),
+            scalesX: (1.0, navigationBackgroundFromScaleX),
+            scalesY: (1.0, navigationBackgroundFromScaleY),
+            duration: duration,
+            completion: {
+                navigationBackgroundAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemFromFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let itemToFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        itemSnapshotView.frame = itemFromFrame
+        let itemToPosition = itemFromFrame.center
+        let itemFromPosition = itemToFrame.center.offsetBy(
+            dx: titleOffsetX,
+            dy: titleOffsetY
+        )
+        animateOutItemView(
+            itemView: itemSnapshotView,
+            positions: (itemFromPosition, itemToPosition),
+            duration: duration,
+            completion: {
+                itemAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let itemAvatarToFrame = itemNode.avatarContainerNode.frame
+        itemAvatarSnapshotView.frame = itemAvatarToFrame
+        let itemAvatarToPosition = itemAvatarToFrame.center
+        let itemAvatarFromPosition = CGPoint(
+            x: itemAvatarToFrame.maxX,
+            y: itemAvatarToFrame.maxY
+        )
+        animateOutItemAvatarView(
+            avatarView: itemAvatarSnapshotView,
+            positions: (itemAvatarFromPosition, itemAvatarToPosition),
+            scales: (0.5, 1.0),
+            duration: duration,
+            completion: {
+                itemAvatarAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationContentToFrame = CGRect(origin: CGPoint.zero, size: itemFrame.size)
+        let navigationContentFromFrame = CGRect(origin: CGPoint.zero, size: navigationFrame.size)
+        navigationContentSnapshotView.frame = navigationContentFromFrame
+        let navigationContentToPosition = navigationContentToFrame.center.offsetBy(
+            dx: -titleOffsetX,
+            dy: -titleOffsetY
+        )
+        let navigationContentFromPosition = navigationContentFromFrame.center
+        animateOutNavigationContentView(
+            contentView: navigationContentSnapshotView,
+            positions: (navigationContentFromPosition, navigationContentToPosition),
+            duration: duration,
+            completion: {
+                navigationContentAnimationFinished = true
+                removeCompletion()
+            }
+        )
+        
+        let navigationAvatarFrame = transitionContext.avatarView.view.convert(transitionContext.avatarView.frame, to: toControllerContainerView)
+        navigationAvatarSnapshotView.frame = navigationAvatarFrame
+        animateOutNavigationAvatarView(
+            avatarView: navigationAvatarSnapshotView,
+            scales: (1.0, 0.5),
+            duration: duration,
+            completion: {
+                navigationAvatarAnimationFinished = true
+                removeCompletion()
+            }
+        )
+    }
+    
+    private func animateOutToControllerView(
+        contentContainerNode: ASDisplayNode,
+        overlayView: UIView,
+        positions: (CGPoint, CGPoint),
+        heights: (CGFloat, CGFloat),
+        scales: (CGFloat, CGFloat),
+        cornerRadiuses: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        contentContainerNode.layer.animate(
+            from: cornerRadiuses.0 as NSNumber,
+            to: cornerRadiuses.1 as NSNumber,
+            keyPath: "cornerRadius",
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        contentContainerNode.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+            removeOnCompletion: false
+        )
+        contentContainerNode.layer.animateHeight(
+            from: heights.0,
+            to: heights.1,
+            duration: duration,
+            timingFunction: CAMediaTimingFunctionName.linear.rawValue,
+            removeOnCompletion: false
+        )
+        contentContainerNode.layer.animateScaleX(
+            from: scales.0,
+            to: scales.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        overlayView.layer.animateAlpha(
+            from: 0.0,
+            to: 0.9,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutItemBackgroundView(
+        backgroundView: UIView,
+        positions: (CGPoint, CGPoint),
+        scalesX: (CGFloat, CGFloat),
+        scalesY: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        backgroundView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleX(
+            from: scalesX.0,
+            to: scalesX.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleY(
+            from: scalesY.0,
+            to: scalesY.1,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutNavigationBackgroundView(
+        backgroundView: UIView,
+        positions: (CGPoint, CGPoint),
+        scalesX: (CGFloat, CGFloat),
+        scalesY: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        backgroundView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration * 0.5,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleX(
+            from: scalesX.0,
+            to: scalesX.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        backgroundView.layer.animateScaleY(
+            from: scalesY.0,
+            to: scalesY.1,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutItemView(
+        itemView: UIView,
+        positions: (CGPoint, CGPoint),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        itemView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        itemView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutItemAvatarView(
+        avatarView: UIView,
+        positions: (CGPoint, CGPoint),
+        scales: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        avatarView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateScale(
+            from: scales.0,
+            to: scales.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateAlpha(
+            from: 0.0,
+            to: 1.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutNavigationContentView(
+        contentView: UIView,
+        positions: (CGPoint, CGPoint),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        contentView.layer.animatePosition(
+            from: positions.0,
+            to: positions.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        contentView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration * 0.5,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+    
+    private func animateOutNavigationAvatarView(
+        avatarView: UIView,
+        scales: (CGFloat, CGFloat),
+        duration: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        avatarView.layer.animateScale(
+            from: scales.0,
+            to: scales.1,
+            duration: duration,
+            removeOnCompletion: false
+        )
+        avatarView.layer.animateAlpha(
+            from: 1.0,
+            to: 0.0,
+            duration: duration,
+            removeOnCompletion: false,
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+}
+
 public class ChatListControllerImpl: TelegramBaseController, ChatListController {
     private var validLayout: ContainerViewLayout?
     
@@ -97,6 +1004,13 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     private var chatListDisplayNode: ChatListControllerNode {
         return super.displayNode as! ChatListControllerNode
     }
+    
+//    public var previewTransitionContext: ControllerPreviewTransitionContext? {
+//        guard let navigationBarView = self.chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View, let chatTitleView = self.chatListHeaderView()?.titleView else {
+//            return nil
+//        }
+//        return ControllerPreviewTransitionContext(navigationBarView: navigationBarView, navigationBarBackgroundView: navigationBarView.backgroundView, titleView: chatTitleView, avatarView: nil)
+//    }
     
     fileprivate private(set) var primaryContext: ChatListLocationContext?
     private let primaryInfoReady = Promise<Bool>()
@@ -1309,7 +2223,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                                 messageId: MessageId(peerId: peer.peerId, namespace: Namespaces.Message.Cloud, id: Int32(clamping: threadId)), channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false
                             )), subject: nil, botStart: nil, mode: .standard(previewing: true))
                             chatController.canReadHistory.set(false)
-                            source = .controller(ContextControllerContentSourceImpl(controller: chatController, sourceNode: node, navigationController: strongSelf.navigationController as? NavigationController))
+                            source = .controllerWithTransition(ContextControllerWithTransitionContentSourceImpl(fromController: strongSelf, toController: chatController, sourceNode: node))
                             
                             let contextController = ContextController(account: strongSelf.context.account, presentationData: strongSelf.presentationData, source: source, items: chatForumTopicMenuItems(context: strongSelf.context, peerId: peer.peerId, threadId: threadId, isPinned: nil, isClosed: nil, chatListController: strongSelf, joined: joined, canSelect: false) |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
                             strongSelf.presentInGlobalOverlay(contextController)
@@ -1326,7 +2240,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         } else {
                             let chatController = strongSelf.context.sharedContext.makeChatController(context: strongSelf.context, chatLocation: .peer(id: peer.peerId), subject: nil, botStart: nil, mode: .standard(previewing: true))
                             chatController.canReadHistory.set(false)
-                            source = .controller(ContextControllerContentSourceImpl(controller: chatController, sourceNode: node, navigationController: strongSelf.navigationController as? NavigationController))
+                            source = .controllerWithTransition(ContextControllerWithTransitionContentSourceImpl(fromController: strongSelf, toController: chatController, sourceNode: node))
                         }
                         
                         let contextController = ContextController(account: strongSelf.context.account, presentationData: strongSelf.presentationData, source: source, items: chatContextMenuItems(context: strongSelf.context, peerId: peer.peerId, promoInfo: promoInfo, source: .chatList(filter: strongSelf.chatListDisplayNode.mainContainerNode.currentItemNode.chatListFilter), chatListController: strongSelf, joined: joined) |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
@@ -1345,7 +2259,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         messageId: MessageId(peerId: peer.peerId, namespace: Namespaces.Message.Cloud, id: Int32(clamping: threadId)), channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false
                     )), subject: nil, botStart: nil, mode: .standard(previewing: true))
                     chatController.canReadHistory.set(false)
-                    source = .controller(ContextControllerContentSourceImpl(controller: chatController, sourceNode: node, navigationController: strongSelf.navigationController as? NavigationController))
+                    source = .controllerWithTransition(ContextControllerWithTransitionContentSourceImpl(fromController: strongSelf, toController: chatController, sourceNode: node))
                     
                     let contextController = ContextController(account: strongSelf.context.account, presentationData: strongSelf.presentationData, source: source, items: chatForumTopicMenuItems(context: strongSelf.context, peerId: peer.peerId, threadId: threadId, isPinned: isPinned, isClosed: threadInfo?.isClosed, chatListController: strongSelf, joined: joined, canSelect: true) |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
                     strongSelf.presentInGlobalOverlay(contextController)
@@ -1391,7 +2305,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                     }
                     let chatController = strongSelf.context.sharedContext.makeChatController(context: strongSelf.context, chatLocation: .peer(id: peer.id), subject: subject, botStart: nil, mode: .standard(previewing: true))
                     chatController.canReadHistory.set(false)
-                    contextContentSource = .controller(ContextControllerContentSourceImpl(controller: chatController, sourceNode: node, navigationController: strongSelf.navigationController as? NavigationController))
+                    contextContentSource = .controllerWithTransition(ContextControllerWithTransitionContentSourceImpl(fromController: strongSelf, toController: chatController, sourceNode: node))
                 }
                 
                 let contextController = ContextController(account: strongSelf.context.account, presentationData: strongSelf.presentationData, source: contextContentSource, items: chatContextMenuItems(context: strongSelf.context, peerId: peer.id, promoInfo: nil, source: .search(source), chatListController: strongSelf, joined: false) |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)

@@ -392,6 +392,13 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     private var canReadHistoryValue = false
     private var canReadHistoryDisposable: Disposable?
     
+    public var previewTransitionContext: ControllerPreviewTransitionContext? {
+        guard let navigationBar = self.navigationBar, let avatarNode = self.avatarNode, let chatTitleView = self.chatTitleView else {
+            return nil
+        }
+        return ControllerPreviewTransitionContext(navigationBarView: navigationBar, navigationBarBackgroundView: navigationBar.backgroundNode, titleView: chatTitleView.titleContainerView, avatarView: avatarNode.avatarNode)
+    }
+    
     private var themeEmoticonAndDarkAppearancePreviewPromise = Promise<(String?, Bool?)>((nil, nil))
     private var didSetPresentationData = false
     private var presentationData: PresentationData
