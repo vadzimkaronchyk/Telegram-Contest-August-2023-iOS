@@ -2899,7 +2899,6 @@ public final class ChatListNode: ListView {
             guard let strongSelf = self else {
                 return
             }
-            print("zxc - \(strongSelf.archiveSwipingState)")
             if !strongSelf.dequeuedInitialTransitionOnLayout {
                 return
             }

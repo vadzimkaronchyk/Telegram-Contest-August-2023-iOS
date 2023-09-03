@@ -1328,7 +1328,6 @@ class ChatListItemNode: ItemListRevealOptionsItemNode {
             let previousTransform = itemLayer.sublayerTransform
             itemLayer.sublayerTransform = sublayerTransform
             
-            print("zxc - \(progress), \(update)")
             switch update {
             case .begin:
                 startAnimation = true
